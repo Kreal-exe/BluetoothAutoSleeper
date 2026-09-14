@@ -2,6 +2,11 @@ import Foundation
 import Cocoa
 import IOBluetooth
 
+// Private IOBluetooth call that blueutil uses as well: switches the controller on/off
+// without root. Used when blueutil is not installed.
+@_silgen_name("IOBluetoothPreferenceSetControllerPowerState")
+func IOBluetoothPreferenceSetControllerPowerState(_ state: Int32)
+
 class BluetoothDaemon {
     private let pidFile = "/tmp/bluetooth_daemon.pid"
     private let logFile = "/tmp/bluetooth_daemon.log"
@@ -33,14 +38,16 @@ class BluetoothDaemon {
     
     private func setupSignalHandlers() {
         // Обработка сигналов для корректного завершения
+        // Remove the PID file on exit so a stale PID (possibly reused by another
+        // process) is never left behind for the GUI to signal.
         signal(SIGTERM) { _ in
-            print("Received SIGTERM, shutting down...")
-            exit(0)
+            unlink("/tmp/bluetooth_daemon.pid")
+            _exit(0)
         }
         
         signal(SIGINT) { _ in
-            print("Received SIGINT, shutting down...")
-            exit(0)
+            unlink("/tmp/bluetooth_daemon.pid")
+            _exit(0)
         }
     }
     
@@ -152,16 +159,16 @@ class BluetoothController {
         print("🔄 Attempting to enable Bluetooth...")
         
         // Метод 1: blueutil (если установлен) - более надежный
-        let bluetilResult = executeShellCommand("blueutil -p 1")
-        if bluetilResult {
+        if let blueutil = blueutilPath, executeShellCommand("'\(blueutil)' -p 1") {
             print("✅ Bluetooth enabled via blueutil")
             return
         }
         
-        // Метод 2: Системная команда для перезапуска bluetoothd
-        let sudoResult = executeShellCommand("sudo /usr/bin/launchctl start com.apple.bluetoothd")
-        if sudoResult {
-            print("✅ Bluetooth enabled via system commands")
+        // Метод 2: IOBluetooth (то же, что делает blueutil, без sudo)
+        IOBluetoothPreferenceSetControllerPowerState(1)
+        Thread.sleep(forTimeInterval: 1.0)
+        if isEnabled {
+            print("✅ Bluetooth enabled via IOBluetooth")
             return
         }
         
@@ -192,16 +199,16 @@ class BluetoothController {
         print("🔄 Attempting to disable Bluetooth...")
         
         // Метод 1: blueutil (если установлен) - более надежный
-        let bluetilResult = executeShellCommand("blueutil -p 0")
-        if bluetilResult {
+        if let blueutil = blueutilPath, executeShellCommand("'\(blueutil)' -p 0") {
             print("✅ Bluetooth disabled via blueutil")
             return
         }
         
-        // Метод 2: Системная команда через sudo (требует разрешений)
-        let sudoResult = executeShellCommand("sudo /usr/bin/pkill bluetoothd && sudo /usr/bin/launchctl stop com.apple.bluetoothd")
-        if sudoResult {
-            print("✅ Bluetooth disabled via system commands")
+        // Метод 2: IOBluetooth (то же, что делает blueutil, без sudo)
+        IOBluetoothPreferenceSetControllerPowerState(0)
+        Thread.sleep(forTimeInterval: 1.0)
+        if !isEnabled {
+            print("✅ Bluetooth disabled via IOBluetooth")
             return
         }
         
@@ -228,6 +235,13 @@ class BluetoothController {
         }
     }
     
+    // A daemon started from the GUI inherits launchd's PATH, which has no Homebrew
+    // directories, so look blueutil up explicitly.
+    private var blueutilPath: String? {
+        ["/opt/homebrew/bin/blueutil", "/usr/local/bin/blueutil"]
+            .first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+    
     private func executeAppleScript(_ script: String) -> Bool {
         let appleScript = NSAppleScript(source: script)
         var error: NSDictionary?
@@ -250,7 +264,7 @@ class BluetoothController {
         print("🔧 Executing: \(command)")
         
         let task = Process()
-        task.launchPath = "/bin/bash"
+        task.executableURL = URL(fileURLWithPath: "/bin/bash")
         task.arguments = ["-c", command]
         
         // Захватываем stderr для диагностики

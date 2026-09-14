@@ -1,71 +1,75 @@
 #!/bin/bash
+# Builds BluetoothAutoSleeper (GUI + background daemon) and installs it into /Applications.
+#
+#   ./build.sh          build and install (relaunches the app if it was running)
+#   ./build.sh --zip    also write dist/BluetoothAutoSleeper-v<version>.zip for a release
+#
+# INSTALL_DIR=~/Applications ./build.sh installs somewhere else.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+NAME="BluetoothAutoSleeper"
+VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$ROOT/Info.plist")"
+BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$ROOT/Info.plist")"
+DEST="${INSTALL_DIR:-/Applications}"
+ZIP=0
+[ "${1:-}" = "--zip" ] && ZIP=1
 
-# Скрипт для сборки BluetoothAutoSleeper приложения с daemon'ом
+SDK="$(xcrun --sdk macosx --show-sdk-path)"
+SWIFTC="$(xcrun --sdk macosx --find swiftc)"
 
-APP_NAME="BluetoothAutoSleeper"
-BUNDLE_ID="com.example.BluetoothAutoSleeper"
+# Build outside the project: synced folders (iCloud Documents) attach extended
+# attributes to everything, and codesign refuses bundles that carry them.
+OUT="$(mktemp -d -t bluetoothautosleeper)"
+trap 'rm -rf "$OUT"' EXIT
+APP="$OUT/$NAME.app"
 
-echo "🔨 Building $APP_NAME..."
+echo "Building $NAME $VERSION (universal)..."
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+cp "$ROOT/Info.plist" "$APP/Contents/Info.plist"
+cp "$ROOT/BluetoothAutoSleeper.icns" "$APP/Contents/Resources/"
 
-# Создаем структуру .app
-mkdir -p "$APP_NAME.app/Contents/MacOS"
-mkdir -p "$APP_NAME.app/Contents/Resources"
+# swiftc takes one -target per call: build each architecture, then lipo them together.
+# $1 = output name, rest = sources.
+build() {
+  local out="$1"; shift
+  for arch in arm64 x86_64; do
+    "$SWIFTC" -O -sdk "$SDK" -target "$arch-apple-macos11.0" "$@" -o "$OUT/$out-$arch"
+  done
+  lipo -create "$OUT/$out-arm64" "$OUT/$out-x86_64" -output "$APP/Contents/MacOS/$out"
+}
+build "$NAME" "$ROOT"/{Main,AppDelegate,ContentView,LogsView,DaemonManager}.swift
+build "BluetoothAutoSleeperDemon" "$ROOT/BluetoothDaemon.swift"
 
-# Копируем Info.plist
-cp Info.plist "$APP_NAME.app/Contents/"
+# Ad-hoc signature: required on Apple Silicon, and keeps the bundle intact in a zip.
+codesign --force --deep --sign - "$APP" >/dev/null 2>&1
+codesign --verify --strict "$APP"
 
-# Копируем иконку
-if [ -f "BluetoothAutoSleeper.icns" ]; then
-    cp BluetoothAutoSleeper.icns "$APP_NAME.app/Contents/Resources/"
-    echo "✅ Icon copied"
-else
-    echo "⚠️ Icon not found, skipping..."
+if [ "$ZIP" = 1 ]; then
+  mkdir -p "$ROOT/dist"
+  ZIPFILE="$ROOT/dist/$NAME-v$VERSION.zip"
+  rm -f "$ZIPFILE"
+  ditto -c -k --norsrc --keepParent "$APP" "$ZIPFILE"
+  echo "Release zip: $ZIPFILE"
 fi
 
-echo "📦 Compiling GUI application..."
-# Компилируем GUI приложение
-swiftc -o "$APP_NAME.app/Contents/MacOS/$APP_NAME" \
-    -target x86_64-apple-macos11.0 \
-    -framework SwiftUI \
-    -framework Cocoa \
-    -framework IOBluetooth \
-    -framework IOKit \
-    Main.swift \
-    AppDelegate.swift \
-    ContentView.swift \
-    LogsView.swift \
-    DaemonManager.swift
-
-if [ $? -ne 0 ]; then
-    echo "❌ GUI build failed!"
-    exit 1
+# Quit a running GUI first (the daemon keeps running on its own and is left alone;
+# stop and restart it from the app to pick up a new daemon build).
+GUI="$DEST/$NAME.app/Contents/MacOS/$NAME"
+WAS_RUNNING=0
+if pgrep -fx "$GUI" >/dev/null 2>&1; then
+  WAS_RUNNING=1
+  echo "Quitting the running $NAME..."
+  osascript -e "tell application id \"$BUNDLE_ID\" to quit" >/dev/null 2>&1 || true
+  for _ in $(seq 1 50); do
+    pgrep -fx "$GUI" >/dev/null 2>&1 || break
+    sleep 0.2
+  done
 fi
 
-echo "⚙️ Compiling daemon..."
-# Компилируем daemon
-swiftc -o "$APP_NAME.app/Contents/MacOS/BluetoothAutoSleeperDemon" \
-    -target x86_64-apple-macos11.0 \
-    -framework Cocoa \
-    -framework IOBluetooth \
-    -framework IOKit \
-    BluetoothDaemon.swift
+mkdir -p "$DEST"
+rm -rf "$DEST/$NAME.app"
+ditto "$APP" "$DEST/$NAME.app"
+echo "Installed: $DEST/$NAME.app"
 
-if [ $? -ne 0 ]; then
-    echo "❌ Daemon build failed!"
-    exit 1
-fi
-
-echo "✅ Build successful!"
-echo "📦 App bundle created: $APP_NAME.app"
-echo ""
-echo "Components:"
-echo "  - GUI Application: $APP_NAME.app/Contents/MacOS/$APP_NAME"
-echo "  - Background Daemon: $APP_NAME.app/Contents/MacOS/BluetoothAutoSleeperDemon"
-echo ""
-echo "To run the app:"
-echo "open $APP_NAME.app"
-echo ""
-echo "To install the app:"
-echo "cp -r $APP_NAME.app /Applications/"
-echo ""
-echo "The daemon will be managed by the GUI application." 
+[ "$WAS_RUNNING" = 1 ] && open "$DEST/$NAME.app"
+exit 0

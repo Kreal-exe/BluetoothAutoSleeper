@@ -4,7 +4,7 @@
 
 echo "🧪 Testing BluetoothAutoSleeper Daemon..."
 
-DAEMON_PATH="./BluetoothAutoSleeper.app/Contents/MacOS/BluetoothAutoSleeperDemon"
+DAEMON_PATH="/Applications/BluetoothAutoSleeper.app/Contents/MacOS/BluetoothAutoSleeperDemon"
 PID_FILE="/tmp/bluetooth_daemon.pid"
 LOG_FILE="/tmp/bluetooth_daemon.log"
 
@@ -34,7 +34,7 @@ start_daemon() {
         check_daemon_status
     else
         echo "❌ Daemon binary not found at $DAEMON_PATH"
-        echo "Please build the app first with: ./build.sh"
+        echo "Please build the app first with: ./build.sh (installs into /Applications)"
         return 1
     fi
 }

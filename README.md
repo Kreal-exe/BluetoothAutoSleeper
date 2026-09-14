@@ -2,7 +2,7 @@
 
 A simple Mac application that automatically manages Bluetooth power state during sleep and wake transitions.
 
-**[📦 Download BluetoothAutoSleeper.dmg](https://github.com/Blunt0FF/BluetoothAutoSleeper/releases/latest)**
+**[📦 Download BluetoothAutoSleeper.dmg](https://github.com/Kreal-exe/BluetoothAutoSleeper/releases/latest)**
 
 ## What the app does
 
@@ -33,21 +33,17 @@ The application consists of two components:
 - Xcode Command Line Tools installed
 - Swift compiler
 
-### Building
+### Building and installing
 ```bash
-cd BluetoothAutoSleeper
-chmod +x build.sh
-./build.sh
+./build.sh            # universal (Apple Silicon + Intel) build, installed into /Applications
+./build.sh --zip      # also writes dist/BluetoothAutoSleeper-v<version>.zip
+INSTALL_DIR=~/Applications ./build.sh   # install somewhere else
 ```
 
-### Installation
-```bash
-# Copy application to Applications folder
-cp -r BluetoothAutoSleeper.app /Applications/
-
-# Or run directly from current folder
-open BluetoothAutoSleeper.app
-```
+The script compiles with plain `swiftc` in a temporary folder (nothing is written
+into the project), ad-hoc signs the bundle and replaces the installed copy, quitting
+and reopening the app if it was running. A daemon that is already running keeps the
+old binary: press STOP and START in the app to pick up the new one.
 
 ## Usage
 
@@ -84,9 +80,10 @@ On first launch, the application may request permissions:
 
 ## Additional Features
 
-The application supports two methods for Bluetooth control:
-1. **AppleScript** - main method through system interface
-2. **blueutil** - alternative method (if installed)
+The daemon switches Bluetooth with:
+1. **blueutil** - if installed (`/opt/homebrew/bin` or `/usr/local/bin`)
+2. **IOBluetooth** - the same system call blueutil uses, no extra install needed
+3. **AppleScript** - last-resort fallback through the menu bar
 
 ### Installing blueutil (optional)
 ```bash
@@ -112,7 +109,7 @@ BluetoothAutoSleeper/
 ├── BluetoothDaemon.swift         # Background process
 ├── Info.plist                    # Application settings
 ├── BluetoothAutoSleeper.icns     # Application icon
-├── build.sh                      # Build script
+├── build.sh                      # Build + install script
 └── README.md                     # Documentation
 ```
 

@@ -148,7 +148,14 @@ class DaemonManager: ObservableObject {
     
     private func getDaemonPid() -> pid_t? {
         guard let pidString = try? String(contentsOfFile: pidFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
-              let pid = pid_t(pidString) else {
+              let pid = pid_t(pidString), pid > 0 else {
+            return nil
+        }
+        // /tmp is shared: only trust the PID if it really is our daemon binary,
+        // otherwise a stale or planted PID file would make us signal another process.
+        var buf = [CChar](repeating: 0, count: 4096)
+        guard proc_pidpath(pid, &buf, UInt32(buf.count)) > 0,
+              String(cString: buf) == daemonPath else {
             return nil
         }
         return pid
